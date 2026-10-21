@@ -79,49 +79,77 @@ def lab_fingerprint(target):
     return hdrs.get("X-Lab-Root")
 
 
-def start_lab(port):
+def port_free(port):
+    """True bila port 127.0.0.1:<port> bisa di-bind (belum dipakai)."""
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        try:
+            s.bind(("127.0.0.1", port))
+            return True
+        except OSError:
+            return False
+
+
+def start_lab(preferred_port=DEFAULT_PORT):
     """Nyalakan instance lab KHUSUS untuk verifikasi.
 
-    Returns (ok, message, proc). Server yang sudah ada di port tsb hanya
-    dipakai bila X-Lab-Root-nya cocok dengan checkout ini.
+    Returns (ok, message, proc, port). Instance yang sudah ada di port tsb
+    hanya dipakai bila X-Lab-Root-nya cocok dengan checkout ini. Bila port
+    preferred dipakai instance lain, cari port bebas berikutnya.
     """
-    target = f"http://127.0.0.1:{port}"
-    fp = lab_fingerprint(target)
-    if fp is not None:
-        if os.path.normpath(fp) == os.path.normpath(LAB_DIR):
-            return True, f"instance lab checkout ini sudah jalan di :{port}", None
-        return False, (f"port {port} dipakai instance lab lain (root={fp}); "
-                       f"pakai --port lain"), None
+    # 1) kalau lab checkout ini sudah jalan di port preferred -> pakai itu
+    fp = lab_fingerprint(f"http://127.0.0.1:{preferred_port}")
+    if fp is not None and os.path.normpath(fp) == os.path.normpath(LAB_DIR):
+        return True, f"instance lab checkout ini sudah jalan di :{preferred_port}", None, preferred_port
 
     os.makedirs(CACHE_DIR, exist_ok=True)
     log_path = os.environ.get(
         "VERIFY_LAB_LOG", os.path.join(tempfile.gettempdir(), "php-rce-2026-verify.log"))
     log = open(log_path, "ab")
-    proc = subprocess.Popen(
-        [sys.executable, os.path.join(LAB_DIR, "serve.py"), "--port", str(port)],
-        cwd=LAB_DIR, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-    _child_procs.append(proc)
-    for _ in range(50):
-        time.sleep(0.2)
-        if proc.poll() is not None:
-            return False, f"serve.py berhenti (lihat {log_path})", proc
-        fp = lab_fingerprint(target)
-        if fp is not None:
-            if os.path.normpath(fp) != os.path.normpath(LAB_DIR):
-                return False, f"server di :{port} bukan instance checkout ini (root={fp})", proc
-            return True, f"lab dinyalakan di :{port}", proc
-    return False, "lab gagal dinyalakan", proc
+
+    for port in range(preferred_port, preferred_port + 20):
+        if not port_free(port):
+            continue
+        proc = subprocess.Popen(
+            [sys.executable, os.path.join(LAB_DIR, "serve.py"), "--port", str(port)],
+            cwd=LAB_DIR, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+        _child_procs.append(proc)
+        for _ in range(50):
+            time.sleep(0.2)
+            if proc.poll() is not None:
+                # gagal bind / crash -> coba port berikutnya
+                _child_procs.remove(proc)
+                break
+            fp = lab_fingerprint(f"http://127.0.0.1:{port}")
+            if fp is not None:
+                if os.path.normpath(fp) != os.path.normpath(LAB_DIR):
+                    return False, f"server di :{port} bukan instance checkout ini (root={fp})", proc, port
+                return True, f"lab dinyalakan di :{port}", proc, port
+        else:
+            return False, f"lab gagal merespons di :{port}", proc, port
+
+    return False, (f"tidak ada port bebas mulai :{preferred_port} "
+                   f"(butuh {preferred_port}..{preferred_port + 19})"), None, preferred_port
 
 
 def stop_lab():
-    """Matikan instance lab yang kita nyalakan sendiri."""
-    for proc in _child_procs:
+    """Matikan instance lab yang kita nyalakan sendiri (termasuk anak `php -S`).
+
+    `serve.py` dan `php -S` dijalankan di session/process group sendiri
+    (start_new_session=True), jadi killpg membasmi keduanya sekaligus.
+    """
+    import signal
+    for proc in list(_child_procs):
         try:
-            proc.terminate()
+            pgid = os.getpgid(proc.pid)
+            os.killpg(pgid, signal.SIGTERM)
             try:
                 proc.wait(timeout=5)
             except subprocess.TimeoutExpired:
-                proc.kill()
+                os.killpg(pgid, signal.SIGKILL)
+        except (ProcessLookupError, PermissionError):
+            pass
         except Exception:  # noqa: BLE001
             pass
     _child_procs.clear()
@@ -241,11 +269,12 @@ def main():
     target = args.target or f"http://127.0.0.1:{args.port}"
 
     if not external:
-        ok, msg, _ = start_lab(args.port)
+        ok, msg, _, port = start_lab(args.port)
         print(f"  [INFO] {msg}")
         if not ok:
             record("lab server menyala", False, msg)
             return 1
+        target = f"http://127.0.0.1:{port}"
     else:
         fp = lab_fingerprint(target)
         if fp is None:

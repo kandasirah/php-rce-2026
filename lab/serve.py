@@ -13,6 +13,7 @@ File .php dieksekusi oleh PHP built-in server (bukan disajikan sebagai teks).
 import argparse
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import time
@@ -38,6 +39,18 @@ def main():
         stderr=subprocess.STDOUT,
         text=True,
     )
+
+    # kalau `serve.py` mati, anak `php -S` harus ikut mati (tidak ada yatim
+    # yang masih memegang port).
+    def _cleanup(signum, frame):  # noqa: ARG001
+        try:
+            proc.terminate()
+        except Exception:  # noqa: BLE001
+            pass
+        raise SystemExit(0)
+
+    signal.signal(signal.SIGTERM, _cleanup)
+    signal.signal(signal.SIGINT, _cleanup)
 
     # tunggu server siap
     for _ in range(50):
