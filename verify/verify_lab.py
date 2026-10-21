@@ -5,21 +5,28 @@ Verifikasi end-to-end lab RCE PHP.
 Menjalankan serangkaian pemeriksaan dan keluar dengan kode 0 hanya bila SEMUA
 langkah kritis lolos:
 
-  1. Lab server (php -S) menyala di 127.0.0.1:8099
+  1. Lab server (php -S) menyala di 127.0.0.1 (default 8098, instance sendiri)
   2. Endpoint MetInfo meniru perilaku produksi (200 + 'success')
-  3. Tahap 1 exploit menulis file cache/weixin/Array.php (write primitive)
-  4. Tahap 2 exploit mengeksekusi perintah -> RCE terbukti
+  3. Exploit tahap 2 mengeksekusi perintah -> RCE terbukti
+  4. Tahap 1 exploit menulis file cache/weixin/Array.php (write primitive)
   5. Semua 6 varian payload AI-assisted berhasil (payload_gen --validate)
   6. Deteksi IOC menemukan artefak penyerang di filesystem
   7. (opsional) Diferensial PHP core: instance vulnerable OOM, patched tidak
 
 Pakai:
-    python3 verify/verify_lab.py
-    python3 verify/verify_lab.py --start-lab        # nyalakan lab dulu
-    python3 verify/verify_lab.py --skip-core         # lewati cek core CVE
+    python3 verify/verify_lab.py                    # hermetik: instance sendiri
+    python3 verify/verify_lab.py --port 8098        # ganti port instance sendiri
+    python3 verify/verify_lab.py --target http://127.0.0.1:8099
+    python3 verify/verify_lab.py --skip-core        # lewati cek core CVE
     python3 verify/verify_lab.py --json
+
+Catatan: secara default verifier menyalakan instance lab KHUSUS miliknya
+di port 8098 lalu mematikannya lagi di akhir. Ini supaya hasil verifikasi
+tidak tertukar dengan lab lain yang kebetulan jalan di port 8099 (mis. dari
+checkout berbeda).
 """
 import argparse
+import atexit
 import json
 import os
 import re
@@ -38,49 +45,90 @@ CACHE_DIR = os.path.join(LAB_DIR, "app", "cache", "weixin")
 ARTIFACT = os.path.join(CACHE_DIR, "Array.php")
 
 ENDPOINT = "/app/system/entrance.php?n=include&m=module&c=weixin&a=doapi"
-DEFAULT_TARGET = "http://127.0.0.1:8099"
+DEFAULT_PORT = 8098
 MARK = "_____"
 
 results = []
+_child_procs = []
 
 
-def record(name, ok, detail=""):
-    results.append({"name": name, "ok": bool(ok), "detail": detail})
-    print(f"  [{'PASS' if ok else 'FAIL'}] {name}" + (f" -- {detail}" if detail else ""))
+def record(name, ok, detail="", skipped=False):
+    results.append({"name": name, "ok": bool(ok), "detail": detail, "skipped": skipped})
+    if skipped:
+        print(f"  [SKIP] {name}" + (f" -- {detail}" if detail else ""))
+    else:
+        print(f"  [{'PASS' if ok else 'FAIL'}] {name}" + (f" -- {detail}" if detail else ""))
     return ok
 
 
 def http_get(url, timeout=5):
+    """GET; kembalikan (status, body, headers) atau (None, err, {})"""
     import urllib.request
     try:
         with urllib.request.urlopen(url, timeout=timeout) as r:
-            return r.status, r.read().decode(errors="replace")
+            return r.status, r.read().decode(errors="replace"), dict(r.headers)
     except Exception as e:  # noqa: BLE001
-        return None, str(e)
+        return None, str(e), {}
 
 
-def start_lab(port=8099):
-    """Nyalakan lab server (php -S) kalau belum jalan."""
-    st, _ = http_get(f"{DEFAULT_TARGET}/app/system/entrance.php", timeout=2)
-    if st is not None:
-        return True, "lab sudah jalan"
+def lab_fingerprint(target):
+    """Ambil X-Lab-Root dari server; None bila tidak hidup / bukan lab kita."""
+    st, _, hdrs = http_get(target + ENDPOINT, timeout=3)
+    if st is None:
+        return None
+    return hdrs.get("X-Lab-Root")
+
+
+def start_lab(port):
+    """Nyalakan instance lab KHUSUS untuk verifikasi.
+
+    Returns (ok, message, proc). Server yang sudah ada di port tsb hanya
+    dipakai bila X-Lab-Root-nya cocok dengan checkout ini.
+    """
+    target = f"http://127.0.0.1:{port}"
+    fp = lab_fingerprint(target)
+    if fp is not None:
+        if os.path.normpath(fp) == os.path.normpath(LAB_DIR):
+            return True, f"instance lab checkout ini sudah jalan di :{port}", None
+        return False, (f"port {port} dipakai instance lab lain (root={fp}); "
+                       f"pakai --port lain"), None
+
     os.makedirs(CACHE_DIR, exist_ok=True)
     log_path = os.environ.get(
         "VERIFY_LAB_LOG", os.path.join(tempfile.gettempdir(), "php-rce-2026-verify.log"))
     log = open(log_path, "ab")
-    subprocess.Popen(
+    proc = subprocess.Popen(
         [sys.executable, os.path.join(LAB_DIR, "serve.py"), "--port", str(port)],
         cwd=LAB_DIR, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-    for _ in range(30):
-        time.sleep(0.4)
-        st, _ = http_get(f"{DEFAULT_TARGET}/app/system/entrance.php", timeout=2)
-        if st is not None:
-            return True, "lab dinyalakan"
-    return False, "lab gagal dinyalakan"
+    _child_procs.append(proc)
+    for _ in range(50):
+        time.sleep(0.2)
+        if proc.poll() is not None:
+            return False, f"serve.py berhenti (lihat {log_path})", proc
+        fp = lab_fingerprint(target)
+        if fp is not None:
+            if os.path.normpath(fp) != os.path.normpath(LAB_DIR):
+                return False, f"server di :{port} bukan instance checkout ini (root={fp})", proc
+            return True, f"lab dinyalakan di :{port}", proc
+    return False, "lab gagal dinyalakan", proc
+
+
+def stop_lab():
+    """Matikan instance lab yang kita nyalakan sendiri."""
+    for proc in _child_procs:
+        try:
+            proc.terminate()
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+        except Exception:  # noqa: BLE001
+            pass
+    _child_procs.clear()
 
 
 def check_lab_up(target):
-    st, body = http_get(target + ENDPOINT, timeout=5)
+    st, body, _ = http_get(target + ENDPOINT, timeout=5)
     return record("lab server menyala", st is not None,
                   f"HTTP {st}" if st else body[:120])
 
@@ -159,8 +207,8 @@ def check_core_diff():
     script = os.path.join(cve, "oom_test.py")
     if not os.path.exists(script):
         return record("diferensial PHP core (CVE-2026-109618)", False, "script tidak ada")
-    st_v, _ = http_get("http://127.0.0.1:8091/info.php", timeout=3)
-    st_f, _ = http_get("http://127.0.0.1:8092/info.php", timeout=3)
+    st_v, _, _ = http_get("http://127.0.0.1:8091/info.php", timeout=3)
+    st_f, _, _ = http_get("http://127.0.0.1:8092/info.php", timeout=3)
     if st_v is None or st_f is None:
         return record("diferensial PHP core (CVE-2026-109618)", False,
                       "instance Apache differential belum jalan (core-cve/apache_diff.sh start)")
@@ -178,38 +226,61 @@ def check_core_diff():
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--target", default=DEFAULT_TARGET)
-    ap.add_argument("--start-lab", action="store_true", help="nyalakan lab bila mati")
+    ap.add_argument("--target", default=None,
+                    help="verifikasi instance yang sudah ada (default: instance sendiri di --port)")
+    ap.add_argument("--port", type=int, default=DEFAULT_PORT,
+                    help=f"port untuk instance lab verifikasi (default {DEFAULT_PORT})")
     ap.add_argument("--skip-core", action="store_true", help="lewati cek diferensial core CVE")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
 
     print("== Verifikasi lab RCE PHP ==")
-    if args.start_lab:
-        ok, msg = start_lab()
+    atexit.register(stop_lab)
+
+    external = args.target is not None
+    target = args.target or f"http://127.0.0.1:{args.port}"
+
+    if not external:
+        ok, msg, _ = start_lab(args.port)
         print(f"  [INFO] {msg}")
         if not ok:
             record("lab server menyala", False, msg)
             return 1
+    else:
+        fp = lab_fingerprint(target)
+        if fp is None:
+            record("lab server menyala", False, f"tidak ada lab di {target}")
+            return 1
+        same = os.path.normpath(fp) == os.path.normpath(LAB_DIR)
+        print(f"  [INFO] target eksternal {target} (root={fp}) "
+              f"{'-> cek filesystem lokal valid' if same else '-> cek filesystem lokal DILEWATI'}")
+        if not same:
+            record("write primitive (cache/weixin/Array.php)", True,
+                   "dilewati: target bukan checkout ini", skipped=True)
+            record("deteksi IOC artefak penyerang", True,
+                   "dilewati: target bukan checkout ini", skipped=True)
 
-    check_lab_up(args.target)
-    check_endpoint(args.target)
+    check_lab_up(target)
+    check_endpoint(target)
     # exploit menulis ulang artefak cache dengan payload sungguhan -> cek file
-    check_rce(args.target)
+    check_rce(target)
     check_write_primitive()
-    check_payload_variants(args.target)
+    check_payload_variants(target)
     check_ioc_detection()
     if not args.skip_core:
         check_core_diff()
 
-    passed = sum(1 for r in results if r["ok"])
-    total = len(results)
+    scored = [r for r in results if not r["skipped"]]
+    passed = sum(1 for r in scored if r["ok"])
+    total = len(scored)
+    skipped = len(results) - total
     print()
-    print(f"== {passed}/{total} pemeriksaan lolos ==")
+    print(f"== {passed}/{total} pemeriksaan lolos ==" + (f" ({skipped} dilewati)" if skipped else ""))
 
     if args.json:
-        print(json.dumps({"passed": passed, "total": total, "results": results},
+        print(json.dumps({"passed": passed, "total": total, "skipped": skipped, "results": results},
                          indent=2, ensure_ascii=False))
+    stop_lab()
     return 0 if passed == total else 1
 
 

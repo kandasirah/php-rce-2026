@@ -10,6 +10,7 @@ dan diverifikasi**, bukan klaim.
 
 ```
 $ python3 verify/verify_lab.py
+  [INFO] lab dinyalakan di :8098
   [PASS] lab server menyala -- HTTP 200
   [PASS] endpoint meniru perilaku MetInfo -- HTTP 200 body='success'
   [PASS] RCE (eksekusi perintah) -- VERIFY-42-1000
@@ -20,6 +21,12 @@ $ python3 verify/verify_lab.py
 
 == 7/7 pemeriksaan lolos ==
 ```
+
+> `verify_lab.py` bersifat **hermetik**: dia menyalakan instance lab sendiri di
+> port `8098` (terpisah dari lab manual di `8099`), lalu mematikannya lagi di
+> akhir. Jadi hasilnya tidak pernah tertukar dengan lab dari checkout lain.
+> Server lab mengirim header `X-Lab-Root` supaya verifier bisa memastikan
+> instance yang dipakai memang miliknya.
 
 ---
 
@@ -32,7 +39,7 @@ $ python3 verify/verify_lab.py
 | `core-cve/` | Diferensial PHP 8.4.11 (vulnerable) vs 8.4.27 (patched) untuk CVE-2026-109618/109619 |
 | `defense/` | Rules WAF, hardening php.ini & Apache, skrip IOC hunting |
 | `notes/` | Analisis root cause, peta CVE viral, peran AI, checklist remediasi (Bahasa Indonesia) |
-| `verify/` | Skrip verifikasi end-to-end (idempotent, bisa dipakai CI) |
+| `verify/` | Skrip verifikasi end-to-end, hermetik (instance sendiri di `:8098`), bisa dipakai CI |
 
 ---
 
@@ -80,7 +87,21 @@ uid=1000(kali) gid=1000(kali) groups=1000(kali),4(adm),20(dialout),...
 Linux kali 6.12.38+kali-amd64 #1 SMP PREEMPT_DYNAMIC ...
 ```
 
-### 3.3 Generator payload AI-assisted
+### 3.3 Verifikasi otomatis
+
+Tidak perlu menyalakan lab manual — verifier akan menyalakan instance sendiri:
+
+```bash
+python3 verify/verify_lab.py            # hermetik, instance sendiri di :8098
+python3 verify/verify_lab.py --json     # output JSON untuk CI
+python3 verify/verify_lab.py --skip-core
+python3 verify/verify_lab.py --target http://127.0.0.1:8099   # pakai lab yang sudah jalan
+```
+
+Exit code `0` hanya bila semua pemeriksaan lolos. Checkout baru yang di-clone
+dari repo ini langsung bisa diverifikasi tanpa langkah tambahan.
+
+### 3.4 Generator payload AI-assisted
 
 ```bash
 # Lihat semua varian
@@ -105,7 +126,7 @@ python3 exploit/payload_gen.py -c 'id' --validate
 berhasil: 6/6
 ```
 
-### 3.4 Diferensial PHP core (CVE-2026-109618)
+### 3.5 Diferensial PHP core (CVE-2026-109618)
 
 Butuh `libphp8.4.so` versi 8.4.27 (patched). Modul ini **tidak disertakan** di
 repo (binarya Debian). Siapkan sendiri di direktori mana pun:
@@ -140,7 +161,7 @@ Hasil utama (detail di `core-cve/RESULTS.md`):
 → **≈79× amplifikasi memori** pada build vulnerable; build patched memakai
 memori konstan.
 
-### 3.5 Pertahanan
+### 3.6 Pertahanan
 
 ```bash
 # Deteksi jejak penyerangan di log + filesystem

@@ -13,6 +13,11 @@ define('IN_MET', true);
 define('PATH_ROOT', dirname(__DIR__) . '/');
 define('PATH_CACHE', PATH_ROOT . 'cache/');
 
+// Fingerprint lab: header ini memungkinkan tooling verifikasi memastikan bahwa
+// server yang responded benar-benar instance dari checkout ini (bukan lab lain
+// yang kebetulan jalan di port yang sama).
+header('X-Lab-Root: ' . dirname(rtrim(PATH_ROOT, '/')));
+
 require_once PATH_ROOT . 'system/include/class/cache.class.php';
 require_once PATH_ROOT . 'system/include/class/weixinreply.class.php';
 
