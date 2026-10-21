@@ -1,0 +1,29 @@
+# Runtime / state yang dibuat saat lab dijalankan (dibuat ulang otomatis oleh serve.py & exploit)
+lab/app/cache/weixin/*.php
+lab/app/cache/weixin/.htaccess
+lab/app/cache/*/
+core-cve/run/
+core-cve/docroot/phpinfo.out
+
+# Log
+*.log
+verify-lab.log
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Editor / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Kredensial (JANGAN pernah commit)
+.env
+.env.*
+*.token
+.github_token
+askpass*.sh

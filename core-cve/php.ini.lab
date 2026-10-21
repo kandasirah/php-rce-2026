@@ -1,0 +1,19 @@
+; php.ini untuk uji diferensial CVE-2026-109618 / CVE-2026-109619
+; memory_limit sengaja dikecilkan supaya OOM bisa dipicu cepat
+memory_limit = 32M
+post_max_size = 16M
+upload_max_filesize = 16M
+max_file_uploads = 1000
+max_input_vars = 10000
+max_input_nesting_level = 64
+
+display_errors = Off
+log_errors = On
+error_log = /dev/stderr
+error_reporting = E_ALL
+
+; Mitigasi dari advisory GHSA-6wmf-4rv5-p3rp (PHP 8.5 only, di-set agar harmless di 8.4)
+fatal_error_backtraces = 0
+; session.upload_progress.enabled = 0   ; <- sengaja dibiarkan untuk uji producer/consumer
+
+extension_dir = /usr/lib/php/20240924
