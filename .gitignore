@@ -1,7 +1,9 @@
 # Runtime / state yang dibuat saat lab dijalankan (dibuat ulang otomatis oleh serve.py & exploit)
+# CATATAN: hanya cache/weixin/ yang diabaikan. cache/config/tables.php adalah
+# FIXTURE LAB yang wajib ikut commit: file itulah yang di-include oleh
+# path traversal tahap 1 -> tanpa itu exploit tidak bisa tahap 2.
 lab/app/cache/weixin/*.php
 lab/app/cache/weixin/.htaccess
-lab/app/cache/*/
 core-cve/run/
 core-cve/docroot/phpinfo.out
 

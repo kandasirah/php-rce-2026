@@ -32,6 +32,14 @@ def main():
     # prasyarat eksploitasi di non-Windows: folder cache/weixin harus ada
     os.makedirs(os.path.join(HERE, "app", "cache", "weixin"), exist_ok=True)
 
+    # fixture wajib: tanpa file ini tahap 1 (path traversal) tidak bisa
+    # menghasilkan tahap 2 (include file payload).
+    fixture = os.path.join(HERE, "app", "cache", "config", "tables.php")
+    if not os.path.exists(fixture):
+        print(f"[lab] PERINGATAN: fixture lab tidak ada: {fixture}", file=sys.stderr)
+        print("[lab] exploit tahap 1/2 akan gagal (file ini harus ikut ter-deploy).",
+              file=sys.stderr)
+
     url = f"http://127.0.0.1:{args.port}/app/system/entrance.php?n=include&m=module&c=weixin&a=doapi"
     proc = subprocess.Popen(
         [args.php, "-S", f"127.0.0.1:{args.port}", "-t", HERE],
