@@ -241,34 +241,41 @@ harus ditangani worker yang sama.
 
 ## 8. Repositori & publikasi
 
-Repo ini dipublikasikan sebagai **`kandasirah/php-rce-2026`** dan **di-set
-`private`** saat push pertama:
+Repo ini dipublikasikan sebagai **`kandasirah/php-rce-2026`** (public):
 
 <https://github.com/kandasirah/php-rce-2026>
 
-Alasan default-nya *private*: repo ini memuat exploit RCE yang **langsung
-bisa jalan** terhadap target yang rentan. Sekali jadi publik, salinan/fork
-tidak bisa ditarik kembali sepenuhnya. Publikasi PoC untuk CVE yang sudah
-di advisori terbuka tetap lazim, tapi itu keputusan pemilik repo.
+Repo sempat dibuat `private` saat push pertama, lalu dibuka ke publik atas
+permintaan pemilik repo. Alasannya: exploit di sini memang **bisa jalan**
+dan publikasi nyaris irreversible, tapi risikonya tercover karena:
 
-### Ubah ke publik
+* advisory + PoC publiknya sudah ada lebih dulu (KIS-2026-06, GHSA php-src),
+  jadi exploit ini tidak menambah informasi baru bagi penyerang;
+* targetnya **replika** yang ditulis ulang, bukan CMS asli, dan seluruh
+  eksploitasi hanya di `127.0.0.1`;
+* separuh isi repo adalah artefak pertahanan yang justru lebih berguna
+  kalau luas dipakai;
+* exploit penuh CVE-2026-109618/109619 memang **tidak** dibuat — yang ada
+  hanya harness diferensial vulnerable-vs-patched.
+
+### Kembalikan ke private
 
 ```bash
 # via GitHub CLI
-gh repo edit kandasirah/php-rce-2026 --visibility public --accept-visibility-change-consequences
+gh repo edit kandasirah/php-rce-2026 --visibility private
 
 # atau via API (butuh scope 'repo' pada PAT)
 curl -X PATCH https://api.github.com/repos/kandasirah/php-rce-2026 \
   -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
-  -d '{"private":false}'
+  -d '{"private":true}'
 ```
 
-### Before publishing ke publik, tambahkan:
+### Yang sudah disiapkan sebelum dipublikasikan
 
-* `LICENSE` (repo ini belum punya lisensi — default GitHub = "all rights reserved")
-* `SECURITY.md` berisi kontak pelapor dan kompromi yang akan ditangani
-* Pernyataan scope yang jelas: lab ini hanya untuk `127.0.0.1`, bukan untuk
-  sistem pihak ketiga.
+* [`LICENSE`](LICENSE) — MIT
+* [`SECURITY.md`](SECURITY.md) — kebijakan disclosure + batasan penggunaan
+* Pernyataan scope di header README: lab ini hanya untuk `127.0.0.1`, bukan
+  untuk sistem pihak ketiga.
 
 > **Catatan kredensial:** PAT yang dipakai untuk push ini pernah ditulis
 > plaintext di chat. Segera *revoke* lalu buat ulang (idealnya *fine-grained
