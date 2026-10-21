@@ -215,3 +215,47 @@ harus ditangani worker yang sama.
 * CVE-2026-109619: exploit lengkap tidak dibuat; yang diuji adalah jalur
   producer/consumer yang dijelaskan advisory dan mitigasinya.
 * CVE-2024-4577 tidak dapat direproduksi di Linux (hanya Windows).
+
+---
+
+## 8. Repositori & publikasi
+
+Repo ini dipublikasikan sebagai **`kandasirah/php-rce-2026`** dan **di-set
+`private`** saat push pertama:
+
+<https://github.com/kandasirah/php-rce-2026>
+
+Alasan default-nya *private*: repo ini memuat exploit RCE yang **langsung
+bisa jalan** terhadap target yang rentan. Sekali jadi publik, salinan/fork
+tidak bisa ditarik kembali sepenuhnya. Publikasi PoC untuk CVE yang sudah
+di advisori terbuka tetap lazim, tapi itu keputusan pemilik repo.
+
+### Ubah ke publik
+
+```bash
+# via GitHub CLI
+gh repo edit kandasirah/php-rce-2026 --visibility public --accept-visibility-change-consequences
+
+# atau via API (butuh scope 'repo' pada PAT)
+curl -X PATCH https://api.github.com/repos/kandasirah/php-rce-2026 \
+  -H "Authorization: Bearer $TOKEN" -H "Accept: application/vnd.github+json" \
+  -d '{"private":false}'
+```
+
+### Before publishing ke publik, tambahkan:
+
+* `LICENSE` (repo ini belum punya lisensi — default GitHub = "all rights reserved")
+* `SECURITY.md` berisi kontak pelapor dan kompromi yang akan ditangani
+* Pernyataan scope yang jelas: lab ini hanya untuk `127.0.0.1`, bukan untuk
+  sistem pihak ketiga.
+
+> **Catatan kredensial:** PAT yang dipakai untuk push ini pernah ditulis
+> plaintext di chat. Segera *revoke* lalu buat ulang (idealnya *fine-grained
+> PAT* dengan scope `Contents: read & write` **satu repo saja**, bukan
+> `repo` global). Jangan pernah menyimpan token di `.git/config` — pakai
+> `GIT_ASKPASS` seperti pada contoh di bawah.
+>
+> ```bash
+> # push tanpa menulis token ke .git/config
+> GIT_ASKPASS=./askpass.sh GIT_TOKEN=ghp_xxx git push
+> ```

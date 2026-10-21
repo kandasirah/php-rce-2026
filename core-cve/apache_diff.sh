@@ -23,6 +23,14 @@ if [ ! -f "$FIXED_MOD" ]; then
   exit 3
 fi
 
+# Peringatan: kalau kedua sisi memakai file modul yang sama, hasil
+# diferensial tidak valid (tidak ada perbedaan vulnerable vs patched).
+if [ "$VULN_MOD" = "$FIXED_MOD" ]; then
+  echo "WARNING: VULN_MOD == FIXED_MOD ('$VULN_MOD')." >&2
+  echo "         Kedua sisi akan memakai modul yang sama; hasil diferensial" >&2
+  echo "         TIDAK valid. Set FIXED_MOD ke modul PHP 8.4.27+ yang terpisah." >&2
+fi
+
 mkdir -p "$RUN/vuln" "$RUN/fixed" "$LAB_DIR/docroot"
 
 gen_conf() {
