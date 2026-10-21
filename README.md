@@ -282,13 +282,44 @@ curl -X PATCH https://api.github.com/repos/kandasirah/php-rce-2026 \
 > Batasan penggunaan ada di [`SECURITY.md`](SECURITY.md). Penulis tidak
 > bertanggung jawab atas penyalahgunakan repo ini di luar lab.
 
-> **Catatan kredensial:** PAT yang dipakai untuk push ini pernah ditulis
-> plaintext di chat. Segera *revoke* lalu buat ulang (idealnya *fine-grained
-> PAT* dengan scope `Contents: read & write` **satu repo saja**, bukan
-> `repo` global). Jangan pernah menyimpan token di `.git/config` — pakai
-> `GIT_ASKPASS` seperti pada contoh di bawah.
->
-> ```bash
-> # push tanpa menulis token ke .git/config
-> GIT_ASKPASS=./askpass.sh GIT_TOKEN=ghp_xxx git push
-> ```
+### Kredensial: pakai SSH, bukan PAT
+
+Repo ini di-push lewat **SSH key** (`git@github.com:kandasirah/php-rce-2026.git`),
+bukan personal access token. Alasannya:
+
+* SSH key hanya bisa dipakai untuk **git**, tidak memberi akses API ke akun.
+* PAT (terutama *classic* dengan scope `repo`) memberi akses ke **seluruh**
+  repo dan API akun — kebocorannya jauh lebih mahal.
+* Tidak ada token yang tersimpan di `.git/config` atau file mana pun di repo.
+
+```bash
+# 1. buat key (kalau belum ada)
+ssh-keygen -t ed25519 -C "kandasirah@github/php-rce-2026" -f ~/.ssh/id_ed25519_github
+
+# 2. daftarkan public key di GitHub -> Settings -> SSH and GPG keys
+cat ~/.ssh/id_ed25519_github.pub
+
+# 3. arahkan remote ke SSH
+git remote set-url origin git@github.com:kandasirah/php-rce-2026.git
+
+# 4. test
+ssh -T git@github.com     # -> "Hi <user>! You've successfully authenticated"
+git push
+```
+
+Kalau memang butuh token (mis. untuk GitHub Actions), pakai **fine-grained
+PAT** dengan scope `Contents: Read and write` pada **satu repo saja** — bukan
+`repo` global. Cara cepat membuatnya tanpa bingung dengan UI-nya:
+
+```
+https://github.com/settings/personal-access-tokens/new?name=php-rce-2026-push&target_name=kandasirah&expires_in=90&contents=write
+```
+
+Lalu set `Repository access` → `Only select repositories` → pilih
+`php-rce-2026` → Generate.
+
+> Di form fine-grained PAT, level `Read and write` **bukan** checkbox terpisah
+> melainkan **dropdown di sebelah kanan** baris permission-nya (mis. baris
+> "Contents"). Kalau se-section Repository permissions tidak muncul, berarti
+> `Repository access` masih `Public repositories (read-only)` — ganti dulu ke
+> `Only select repositories`. `Metadata: read` selalu granted otomatis.
