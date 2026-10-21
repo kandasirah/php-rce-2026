@@ -277,6 +277,11 @@ curl -X PATCH https://api.github.com/repos/kandasirah/php-rce-2026 \
 * Pernyataan scope di header README: lab ini hanya untuk `127.0.0.1`, bukan
   untuk sistem pihak ketiga.
 
+> **Penegakan lisensi & tanggung jawab:** MIT mengizinkan penggunaan ulang,
+> tapi itu **bukan** izin memakai exploit ini terhadap sistem orang lain.
+> Batasan penggunaan ada di [`SECURITY.md`](SECURITY.md). Penulis tidak
+> bertanggung jawab atas penyalahgunakan repo ini di luar lab.
+
 > **Catatan kredensial:** PAT yang dipakai untuk push ini pernah ditulis
 > plaintext di chat. Segera *revoke* lalu buat ulang (idealnya *fine-grained
 > PAT* dengan scope `Contents: read & write` **satu repo saja**, bukan
