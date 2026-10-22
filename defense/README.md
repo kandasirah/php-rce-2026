@@ -9,6 +9,7 @@ mendeteksi RCE PHP yang dibahas di lab ini.
 | `php.ini-hardening.ini` | Tim Infra / Sysadmin | Hardening PHP + mitigasi sementara CVE-2026-109618/109619 |
 | `apache-hardening.conf` | Tim Web / Sysadmin | Batas request, buang header transport payload, matikan PHP engine di direktori cache |
 | `ioc_hunt.py` | Blue team / SOC | Memburu jejak penyerangan di log & filesystem |
+| `check_mitigations.py` | Tim Infra / Blue team | Cek mitigasi **runtime** (bukan cuma file konfigurasi) — apakah rantai `php2shell` masih bisa jalan |
 
 ---
 
@@ -32,6 +33,21 @@ Aturan yang ditulis:
   HTTP yang andal karena bug-nya use-after-free antar-request)
 * **Umum** — `id:1004001`–`1004003` (signature shell, akses `$_SERVER[HTTP_*]`,
   path OS sensitif) dan rate limit `id:1005001`–`1005002`
+* **Rantai `php2shell`** — `id:1006001`–`1006006`
+  * `1006001` — tag PHP (`<?php`) di atribut `filename` part multipart
+    (vektor penempatan payload file session)
+  * `1006002` — simbol internal PHP (`zend_internal_function`, `function_table`,
+    `executor_globals`) di atribut `filename` (vektor overwrite handler)
+  * `1006003` — nilai field `PHP_SESSION_UPLOAD_PROGRESS` yang memuat `|`
+    + serialized blob
+  * `1006004` — tag PHP / marker unserialize / `base64_decode` di nilai field
+    `PHP_SESSION_UPLOAD_PROGRESS` (vektor `key`)
+  * `1006005` — akses langsung ke file `sess_*` lewat parameter (LFI)
+  * `1006006` — data session yang **sudah tercemar** payload PHP
+    (`upload_progress_*|...s:N:"...<?php`) → bukti state bocor
+
+  > Aturan-aturan ini **deteksi**, bukan pengganti `session.upload_progress.enabled=0`.
+  > Kalau mitigasi itu aktif, permintaan payload tidak pernah sampai ke PHP.
 
 Pemasangan:
 
@@ -72,9 +88,18 @@ Bagian penting:
   segera setelah PHP ≥ 8.4.27 terpasang.**
   * Jangan pernah memakai `RLIMIT_AS` / `RLIMIT_DATA` — advisory menyatakan
     itu justru memicu `mmap()` gagal → masuk ke jalur `longjmp()` yang rentan.
-* `session.upload_progress.enabled = 0` — memutus jalur "consumer" pada
-  CVE-2026-109619 (session upload progress menyentuh state sebelum request
-  diinisialisasi normal).
+* `session.upload_progress.cleanup = On` — hapus data progress begitu upload
+  selesai. Jangan `Off`: sisa progress di file session justru kondisi
+  "state bocor" yang dipakai rantai D.
+* `session.upload_progress.enabled = 0` — **mitigasi paling penting untuk
+  rantai `php2shell`**: memutus jalur payload masuk lewat file session, dan
+  dengan begitu menutup rantai A, B, C, dan D sekaligus. Patch 8.4.27 hanya
+  menutup rantai D, jadi upgrade **tidak cukup** tanpa baris ini.
+* `session.serialize_handler = php` — menutup rantai C (mismatch antara
+  serializer yang menulis file session dan handler internal yang membacanya).
+* `ffi.enable = preload` — menutup rantai E (FFI = write primitive ke memori
+  proses). Catatan: `preload` masih mengizinkan FFI dari file preload, jadi
+  pastikan tidak ada preload file yang memanggil `FFI::cdef`.
 * `fatal_error_backtraces = 0` — memutus "producer" terkonfirmasi pada
   CVE-2026-109619 (hanya relevan untuk PHP 8.5, aman dipasang di 8.4).
 * `post_max_size = 16M`, `max_file_uploads = 20`, `max_input_nesting_level = 16`
@@ -157,6 +182,54 @@ Contoh output nyata dari lab:
 
 ---
 
+## 5. `check_mitigations.py`
+
+Membaca konfigurasi PHP yang **benar-benar dipakai runtime** (bukan hanya
+file `.ini` di disk) lalu menilai apakah mitigasi wajib sudah aktif.
+
+```bash
+# semua instance lab yang sedang hidup
+python3 defense/check_mitigations.py --lab
+
+# satu server
+python3 defense/check_mitigations.py --url 'http://127.0.0.1:8093/info.php'
+
+# lewat FastCGI ke php-fpm
+python3 defense/check_mitigations.py --fpm-port 8098 --script /info.php
+
+# output JSON untuk CI
+python3 defense/check_mitigations.py --lab --json
+```
+
+Exit code: `0` semua mitigasi wajib terpenuhi, `1` ada mitigasi wajib yang belum
+aktif, `2` target tidak terbaca / di luar loopback.
+
+Yang dicek:
+
+| Kunci | Level | Artinya |
+|---|---|---|
+| `session.upload_progress.enabled` | wajib | Menutup rantai A/B/C/D sekaligus |
+| `session.serialize_handler` | wajib | Menutup rantai C (butuh mismatch handler) |
+| `ffi.enable` | wajib | Menutup rantai E (FFI = write primitive ke memori proses) |
+| `memory_limit` | wajib | Mitigasi advisory CVE-2026-109618 (tidak mencegah state bocor) |
+| `disable_functions` | opsional | Membatasi konsekuensi RCE, bukan menutup rantai |
+| `session.upload_progress.cleanup` | opsional | Membersihkan data progress setelah upload |
+
+Contoh output nyata:
+
+```
+=== apache-mitigated (Apache + mod_php 8.4.27 (PATCHED + mitigasi))
+  [+] session.upload_progress.enabled        = '0'    wajib
+      OK -- Menutup rantai A/B/C/D (payload masuk lewat file session)
+  [!] memory_limit                           = '-1'   wajib
+      BAHAYA (tidak ada batas memori) -- Mitigasi advisory CVE-2026-109618
+```
+
+> `ffi.enable = preload` masih mengizinkan FFI dari file **preload**. Pastikan
+> tidak ada preload file yang memanggil `FFI::cdef`.
+
+---
+
 ## Checklist penerapan (prioritas)
 
 1. **Upgrade PHP** ke 8.2.35 / 8.3.36 / 8.4.27 / 8.5.12 — satu-satunya
@@ -169,3 +242,8 @@ Contoh output nyata dari lab:
 6. **Rotasi kredensial** (admin DB, token API, SSH key) bila ada indikasi
    kompromis: RCE = akses penuh ke credential aplikasi.
 7. Setelah upgrade, kembalikan `memory_limit` ke nilai finite.
+8. **Pasang `session.upload_progress.enabled = 0`.** Ini wajib, bukan opsional:
+   patch 8.4.27 hanya menutup satu dari lima rantai yang terverifikasi.
+   Verifikasi dengan `python3 defense/check_mitigations.py --url ...`.
+9. Kalau FFI tidak dipakai aplikasi, pastikan `ffi.enable = preload` dan tidak
+   ada preload file yang memanggil `FFI::cdef`.

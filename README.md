@@ -36,8 +36,9 @@ $ python3 verify/verify_lab.py
 |---|---|
 | `lab/` | Replika MetInfo rentan (CVE-2026-29014) + server `php -S` di 127.0.0.1:8099 |
 | `exploit/` | `exploit.py` (RCE 2 tahap) + `payload_gen.py` (generator payload AI-assisted) |
+| `exploit/php2shell/` | Lab & 5 tool eksploit **PHP core** (CVE-2026-109618/109619) — 12 instance vulnerable vs patched |
 | `core-cve/` | Diferensial PHP 8.4.11 (vulnerable) vs 8.4.27 (patched) untuk CVE-2026-109618/109619 |
-| `defense/` | Rules WAF, hardening php.ini & Apache, skrip IOC hunting |
+| `defense/` | Rules WAF, hardening php.ini & Apache, skrip IOC hunting, cek mitigasi runtime |
 | `notes/` | Analisis root cause, peta CVE viral, peran AI, checklist remediasi (Bahasa Indonesia) |
 | `verify/` | Skrip verifikasi end-to-end, hermetik (instance sendiri di `:8098`), bisa dipakai CI |
 
@@ -48,11 +49,19 @@ $ python3 verify/verify_lab.py
 | CVE | Komponen | Severity | Status di lab |
 |---|---|---|---|
 | **CVE-2026-29014** | MetInfo CMS ≤ 8.1 — unauthenticated PHP code injection | 9.3 | **RCE penuh, terverifikasi** |
-| **CVE-2026-109618** | PHP core — RCE via OOM corruption | 9.2 | **Diferensial terukur** (8.4.11 vs 8.4.27) |
-| **CVE-2026-109619** | PHP core — RCE via stale global state | 9.2 | Mitigasi & jalur producer/consumer |
+| **CVE-2026-109618** | PHP core — RCE via OOM corruption | 9.2 | **RCE terverifikasi** (Chain D: OOM startup → file session basi → RCE) |
+| **CVE-2026-109619** | PHP core — RCE via stale global state | 9.2 | **RCE terverifikasi** (Chain A/C via file session) + UAF (Chain B) |
 | CVE-2026-6722 / 7261 / 7262 | ext/soap — UAF | Critical | Ditinjau, tidak dieksploitasi penuh |
 | CVE-2026-17544 | ext/bcmath — OOB write | High | Ditinjau |
 | CVE-2024-4577 | PHP-CGI argument injection | 9.8 | **Tidak reproducible** (Windows only) |
+
+> **Catatan penting soal patch.** Untuk PHP 8.4.27, **hanya Chain D yang benar-benar
+> ditutup patch**. Chain A, B, C, dan E (FFI) **tetap jalan** di 8.4.27 karena
+> akar masalahnya ada di `ext/session`, yang tidak disentuh patch tersebut.
+> Yang menutup keempatnya sekaligus adalah mitigasi konfigurasi
+> `session.upload_progress.enabled = 0`. Detailnya di
+> [`exploit/php2shell/README.md`](exploit/php2shell/README.md) dan
+> [`notes/04-php2shell-chains.md`](notes/04-php2shell-chains.md).
 
 ---
 
@@ -96,6 +105,7 @@ python3 verify/verify_lab.py            # hermetik, instance sendiri di :8098
 python3 verify/verify_lab.py --json     # output JSON untuk CI
 python3 verify/verify_lab.py --skip-core
 python3 verify/verify_lab.py --target http://127.0.0.1:8099   # pakai lab yang sudah jalan
+python3 verify/verify_lab.py --php2shell  # + matriks rantai php2shell (butuh labctl start all)
 ```
 
 Exit code `0` hanya bila semua pemeriksaan lolos. Checkout baru yang di-clone
@@ -161,7 +171,44 @@ Hasil utama (detail di `core-cve/RESULTS.md`):
 → **≈79× amplifikasi memori** pada build vulnerable; build patched memakai
 memori konstan.
 
-### 3.6 Pertahanan
+### 3.6 Lab php2shell — eksploit PHP core (CVE-2026-109618/109619)
+
+Modul terpisah dari exploit MetInfo: yang diuji di sini adalah **PHP core**,
+dan jalur serangannya lewat **file session** (bukan file `.php` di direktori cache).
+
+```bash
+# 1. unduh artefak build PHP (patched 8.4.27, vulnerable 8.4.24) ke ~/pkgs
+bash exploit/php2shell/setup_artifacts.sh
+
+# 2. nyalakan 12 instance lab (vulnerable vs patched, Apache vs FPM)
+python3 exploit/php2shell/labctl.py start all
+python3 exploit/php2shell/labctl.py status all
+
+# 3. jalankan salah satu tool
+python3 exploit/php2shell/chain_a_session_lfi.py -t http://127.0.0.1:8093 -c 'id'
+
+# 4. matriks verifikasi semua rantai x semua instance
+python3 exploit/php2shell/verify_chains.py --markdown
+
+# 5. bersihkan
+python3 exploit/php2shell/labctl.py stop all
+```
+
+Lima rantai yang diuji: **A** (upload_progress → LFI → RCE), **B** (UAF
+`var_destroy` → crash), **C** (handler mismatch → `__destruct` → RCE), **D** (OOM
+startup → file session basi → RCE), **E** (FFI → overwrite `handler` internal
+function → RCE native).
+
+```bash
+# contoh nyata: RCE pre-auth lewat Chain A
+$ python3 exploit/php2shell/chain_a_session_lfi.py -t http://127.0.0.1:8093 -c 'id'
+[+] RCE BERHASIL -> uid=1000(kali) gid=1000(kali) groups=1000(kali),4(adm),...
+```
+
+Detail tiap tool, matriks hasil, dan catatan patch-vs-mitigasi ada di
+[`exploit/php2shell/README.md`](exploit/php2shell/README.md).
+
+### 3.7 Pertahanan
 
 ```bash
 # Deteksi jejak penyerangan di log + filesystem
@@ -208,6 +255,8 @@ harus ditangani worker yang sama.
 | [`notes/01-analisis-cve-2026-29014.md`](notes/01-analisis-cve-2026-29014.md) | Root cause lengkap, alur exploit, kenapa AI expedited payload crafting |
 | [`notes/02-payload-ai.md`](notes/02-payload-ai.md) | Peran AI dalam pembuatan payload + konsekuensi untuk pertahanan |
 | [`notes/03-remediation.md`](notes/03-remediation.md) | Checklist remediasi berurutan prioritas |
+| [`notes/04-php2shell-chains.md`](notes/04-php2shell-chains.md) | Analisis lengkap rantai `php2shell`: A–E, root cause, bukti, tabel patch vs mitigasi |
+| [`exploit/php2shell/README.md`](exploit/php2shell/README.md) | Cara pakai 5 tool lab php2shell + matriks hasil nyata |
 | [`core-cve/RESULTS.md`](core-cve/RESULTS.md) | Data diferensial PHP 8.4.11 vs 8.4.27 |
 | [`defense/README.md`](defense/README.md) | Cara memasang tiap artefak pertahanan |
 
@@ -229,12 +278,18 @@ harus ditangani worker yang sama.
 
 * Lab MetInfo adalah **replika** yang ditulis ulang dari potongan kode pada
   advisory, bukan MetInfo asli (repository upstream butuh kredensial).
-* CVE-2026-109618: yang didemonstrasikan adalah **premise** (OOM saat request
-  startup + shutdown pada state invalid) serta **perbedaan perilaku** antara
-  build vulnerable dan patched. Exploit RCE penuh membutuhkan heap shaping
-  spesifik dan tidak dipublikasikan.
-* CVE-2026-109619: exploit lengkap tidak dibuat; yang diuji adalah jalur
-  producer/consumer yang dijelaskan advisory dan mitigasinya.
+* **CVE-2026-109618/109619:** exploit RCE **sudah dibuat dan terverifikasi** di
+  modul `exploit/php2shell/` (5 rantai, 12 instance vulnerable-vs-patched). Yang
+  **tidak** dibuat: RCE lewat UAF Chain B — tool itu hanya membuktikan
+  **crash / heap corruption**, karena primitive write-after-free-nya belum ada.
+* Patch 8.4.27 hanya menutup **satu** dari lima rantai (Chain D). Chain A, B,
+  C, dan E **tetap jalan** di 8.4.27. Upgrade saja tidak cukup —
+  `session.upload_progress.enabled=0` juga wajib dipasang.
+* Chain E butuh `ffi.enable=1`. Write primitive-nya berasal dari FFI, **bukan**
+  dari UAF Chain B — dua hal berbeda.
+* Instance FPM 1 worker (`fpm-vuln`, `fpm-fixed`) tidak dipakai menilai
+  Chain A/B/C karena request-nya antre di belakang producer, bukan karena
+  свой alasan keamanan.
 * CVE-2024-4577 tidak dapat direproduksi di Linux (hanya Windows).
 
 ---
@@ -254,9 +309,28 @@ dan publikasi nyaris irreversible, tapi risikonya tercover karena:
 * targetnya **replika** yang ditulis ulang, bukan CMS asli, dan seluruh
   eksploitasi hanya di `127.0.0.1`;
 * separuh isi repo adalah artefak pertahanan yang justru lebih berguna
-  kalau luas dipakai;
-* exploit penuh CVE-2026-109618/109619 memang **tidak** dibuat — yang ada
-  hanya harness diferensial vulnerable-vs-patched.
+  kalau luas dipakai.
+
+### ⚠️ Perubahan isi repo (2026-10-21)
+
+Isi repo **sudah berubah material** sejak paragraf di atas ditulis. Klaim lama
+bahwa "exploit penuh CVE-2026-109618/109619 memang tidak dibuat" **sudah tidak
+benar** dan sudah dihapus dari README ini. Sekarang repo memuat:
+
+* 5 tool eksploit PHP core yang **benar-benar menghasilkan RCE** terverifikasi
+  (Chain A, C, D, E) plus 1 tool pembukti heap corruption (Chain B);
+* harness 12 instance (vulnerable vs patched, Apache vs FPM);
+* payload yang siap jalan terhadap PHP 8.4.11 / 8.4.24 yang **belum dipatch**.
+
+Artinya pembenaran "tidak menambah informasi baru bagi penyerang" **sekarang
+lebih lemah**: exploit di repo ini sudah dirakit sampai RCE, bukan sekadar
+premise. Yang tetap sama: targetnya replika lokal, tidak ada kode yang
+menembak alamat pihak ketiga, dan advisory resminya sudah publik lebih dulu.
+
+> **Rekomendasi: kembalikan repo ke `private`.** Lab ini tetap berguna untuk
+> riset internal, dan tidak ada bagian yang butuh publik — artefak pertahanan
+> bisa dipisah ke repo publik tersendiri kalau memang mau dibagikan luas.
+> Keputusan tetap milik pemilik repo; perintah untuk switch ada di bawah.
 
 ### Kembalikan ke private
 

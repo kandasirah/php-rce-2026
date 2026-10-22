@@ -7,6 +7,16 @@ lab/app/cache/weixin/.htaccess
 core-cve/run/
 core-cve/docroot/phpinfo.out
 
+# Runtime lab php2shell (CVE-2026-109618/109619).
+# WAJIB diabaikan: run/ berisi httpd.conf+fpm.conf hasil generate, httpd.pid,
+# php.ini hasil generate, dan file session 'sess_*' yang ISI-NYA payload RCE.
+# File-file ini dibikin ulang otomatis oleh labctl.py, tidak perlu di-commit.
+exploit/php2shell/run/
+# File session bocor (isi = payload RCE) di mana pun
+sess_*
+# PID proses
+*.pid
+
 # Log
 *.log
 verify-lab.log

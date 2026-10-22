@@ -12,12 +12,14 @@ langkah kritis lolos:
   5. Semua 6 varian payload AI-assisted berhasil (payload_gen --validate)
   6. Deteksi IOC menemukan artefak penyerang di filesystem
   7. (opsional) Diferensial PHP core: instance vulnerable OOM, patched tidak
+  8. (opsional) Matriks rantai php2shell (CVE-2026-109618/109619)
 
 Pakai:
     python3 verify/verify_lab.py                    # hermetik: instance sendiri
     python3 verify/verify_lab.py --port 8098        # ganti port instance sendiri
     python3 verify/verify_lab.py --target http://127.0.0.1:8099
     python3 verify/verify_lab.py --skip-core        # lewati cek core CVE
+    python3 verify/verify_lab.py --php2shell        # + matriks rantai php2shell
     python3 verify/verify_lab.py --json
 
 Catatan: secara default verifier menyalakan instance lab KHUSUS miliknya
@@ -252,6 +254,32 @@ def check_core_diff():
                   f"vulnerable=OOM:{vuln_oom} patched=200:{fixed_ok}")
 
 
+def check_php2shell():
+    """Matriks rantai php2shell (CVE-2026-109618/109619).
+
+    Butuh instance lab php2shell yang sudah hidup
+    (`python3 exploit/php2shell/labctl.py start all`). Kalau tidak ada
+    instance hidup, verify_chains.py keluar dengan kode 2 dan cek ini gagal.
+    """
+    script = os.path.join(ROOT, "exploit", "php2shell", "verify_chains.py")
+    if not os.path.exists(script):
+        return record("matriks rantai php2shell (CVE-2026-109618/109619)",
+                      False, "script tidak ada")
+    try:
+        p = subprocess.run([sys.executable, script, "--markdown"],
+                           capture_output=True, text=True, timeout=1800)
+    except subprocess.TimeoutExpired:
+        return record("matriks rantai php2shell (CVE-2026-109618/109619)",
+                      False, "timeout")
+    out = (p.stdout or "") + (p.stderr or "")
+    lines = [ln for ln in out.strip().splitlines() if ln.strip()]
+    detail = lines[-1][:160] if lines else "tidak ada output"
+    if p.returncode == 2:
+        detail = "tidak ada instance lab php2shell yang hidup"
+    return record("matriks rantai php2shell (CVE-2026-109618/109619)",
+                  p.returncode == 0, detail)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--target", default=None,
@@ -259,6 +287,9 @@ def main():
     ap.add_argument("--port", type=int, default=DEFAULT_PORT,
                     help=f"port untuk instance lab verifikasi (default {DEFAULT_PORT})")
     ap.add_argument("--skip-core", action="store_true", help="lewati cek diferensial core CVE")
+    ap.add_argument("--php2shell", action="store_true",
+                    help="tambahkan cek matriks rantai php2shell "
+                         "(butuh: labctl.py start all)")
     ap.add_argument("--json", action="store_true")
     args = ap.parse_args()
 
@@ -298,6 +329,8 @@ def main():
     check_ioc_detection()
     if not args.skip_core:
         check_core_diff()
+    if args.php2shell:
+        check_php2shell()
 
     scored = [r for r in results if not r["skipped"]]
     passed = sum(1 for r in scored if r["ok"])

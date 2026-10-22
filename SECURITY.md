@@ -22,6 +22,12 @@ dijalankan terhadap `127.0.0.1` saja.
   pihak lain** tanpa izin tertulis.
 * Menggunakan `exploit/payload_gen.py` untuk membangun payload terhadap
   sistem produksi.
+* Menjalankan tool di `exploit/php2shell/` (`chain_a_session_lfi.py`,
+  `chain_b_uaf.py`, `chain_c_mismatch_rce.py`, `chain_d_oom_stale.py`,
+  `chain_b_engine.py`) terhadap server yang bukan milik sendiri. Tool-tool ini
+  menghasilkan RCE nyata dan sengaja dikunci ke `127.0.0.1`.
+* Menggunakan artefak di `exploit/php2shell/` untuk menyusun exploit kit atau
+  membundelnya jadi payload yang dibagikan ke orang lain.
 * Men-deploy artefak di `defense/` ke server produksi tanpa pengujian
   terlebih dahulu. Aturan ModSecurity yang terlalu agresif bisa merusak
   layanan (false positive).
@@ -41,6 +47,14 @@ dijalankan terhadap `127.0.0.1` saja.
 cd lab && python3 serve.py --port 8099
 python3 exploit/exploit.py -t http://127.0.0.1:8099 -c 'id'
 
-# 2. uji deteksi di server milik sendiri atau lab internal
+# 2. lab php2shell (aman -- hanya 127.0.0.1)
+python3 exploit/php2shell/labctl.py start all
+python3 exploit/php2shell/chain_a_session_lfi.py -t http://127.0.0.1:8093 -c 'id'
+python3 exploit/php2shell/labctl.py stop all
+
+# 3. uji deteksi di server milik sendiri atau lab internal
 python3 defense/ioc_hunt.py --fs /var/www/html
+
+# 4. cek mitigasi runtime di server sendiri
+python3 defense/check_mitigations.py --url 'http://127.0.0.1:8093/info.php'
 ```
